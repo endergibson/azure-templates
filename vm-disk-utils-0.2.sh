@@ -298,7 +298,8 @@ create_striped_volume()
 check_mdadm() {
     dpkg -s mdadm >/dev/null 2>&1
     if [ ${?} -ne 0 ]; then
-        (yum -y update || (sleep 15; yum -y update)) > /dev/null
+        (apt-get -y update || (sleep 15; apt-get -y update)) > /dev/null
+        DEBIAN_FRONTEND=noninteractive sudo apt-get -y install mdadm --fix-missing
     fi
 }
 
