@@ -1,89 +1,100 @@
 #!/bin/bash
+# ---------------------------------------------------------------------------
+# vh-diks-hal.sh
 
-# The MIT License (MIT)
-#
-# Copyright (c) 2015 Microsoft Azure
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-# 
-# The above copyright notice and this permission notice shall be included in all
-# copies or substantial portions of the Software.
-# 
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
-#
-# Script Name: vm-disk-utils.sh
-# Author: Trent Swanson - Full Scale 180 Inc github:(trentmswanson)
-# Version: 0.1
-# Last Modified By:       Trent Swanson
-# Description:
-#  This script automates the partitioning and formatting of data disks
-#  Data disks can be partitioned and formatted as seperate disks or in a RAID0 configuration
-#  The script will scan for unpartitioned and unformatted data disks and partition, format, and add fstab entries
-# Parameters :
-#  1 - b: The base directory for mount points (default: /datadisks)
-#  2 - s  Create a striped RAID0 Array (No redundancy)
-#  3 - h  Help 
-# Note : 
-# This script has only been tested on Ubuntu 12.04 LTS and must be root
+# Copyright 2016, DREAMgenics S.L.
+# All rights reserved.
 
-help()
-{
-    echo "Usage: $(basename $0) [-b data_base] [-h] [-s]"
-    echo ""
-    echo "Options:"
-    echo "   -b         base directory for mount points (default: /datadisks)"
-    echo "   -h         this help message"
-    echo "   -s         create a striped RAID array (no redundancy)"
+# Usage: bash vh-diks-hal.sh [-h|--help]
+
+# Revision history:
+# 2016-06-09 Created by Hal
+# ---------------------------------------------------------------------------
+
+PROGNAME=${0##*/}
+VERSION="0.1"
+
+clean_up() { # Perform pre-exit housekeeping
+  return
 }
 
-log()
-{
-    # Un-comment the following if you would like to enable logging to a service
-    #curl -X POST -H "content-type:text/plain" --data-binary "${HOSTNAME} - $1" https://logs-01.loggly.com/inputs/<key>/tag/es-extension,${HOSTNAME}
-    echo "$1"
+error_exit() {
+  echo -e "${PROGNAME}: ${1:-"Unknown Error"}" >&2
+  clean_up
+  exit 1
 }
 
-if [ "${UID}" -ne 0 ];
-then
-    log "Script executed without root permissions"
-    echo "You must be root to run this program." >&2
-    exit 3
+graceful_exit() {
+  clean_up
+  exit
+}
+
+signal_exit() { # Handle trapped signals
+  case $1 in
+    INT)
+      error_exit "Program interrupted by user" ;;
+    TERM)
+      echo -e "\n$PROGNAME: Program terminated" >&2
+      graceful_exit ;;
+    *)
+      error_exit "$PROGNAME: Terminating on unknown signal" ;;
+  esac
+}
+
+usage() {
+  echo -e "Usage: $PROGNAME [-h|--help]"
+}
+
+help_message() {
+  cat <<- _EOF_
+  $PROGNAME ver. $VERSION
+  Formating new disks and creating raid 0
+
+  $(usage)
+
+  Options:
+	-h, --help  Display this help message and exit.
+	-b         base directory for mount points (default: /datadisks)
+	-h         this help message
+	-s         create a striped RAID array (no redundancy)
+
+  NOTE: You must be the superuser to run this script.
+
+_EOF_
+  return
+}
+
+# Trap signals
+trap "signal_exit TERM" TERM HUP
+trap "signal_exit INT"  INT
+
+# Check for root UID
+if [[ $(id -u) != 0 ]]; then
+  error_exit "You must be the superuser to run this script."
 fi
 
-# Base path for data disk mount points
-DATA_BASE="/datadisks"
-
-while getopts b:sh optname; do
-    log "Option $optname set with value ${OPTARG}"
-  case ${optname} in
-    b)  #set clsuter name
-      DATA_BASE=${OPTARG}
-      ;;
-    s) #Partition and format data disks as raid set
-      RAID_CONFIGURATION=1
-      ;;
-    h)  #show help
-      help
-      exit 2
-      ;;
-    \?) #unrecognized option - show help
-      echo -e \\n"Option -${BOLD}$OPTARG${NORM} not allowed."
-      help
-      exit 2
-      ;;
+# Parse command-line
+while [[ -n $1 ]]; do
+  case $1 in
+    -h | --help)
+      help_message; graceful_exit ;;
+    -* | --*)
+      usage
+      error_exit "Unknown option $1" ;;
+    *)
+      echo "Argument $1 to process..." ;;
   esac
+  shift
 done
+
+
+
+# Main logic
+# Base path for data disk mount points
+DATA_BASE="/datosraid"
+#Partition and format data disks as raid set
+RAID_CONFIGURATION=1
+
 
 get_next_md_device() {
     shopt -s extglob
@@ -106,7 +117,6 @@ is_partitioned() {
         return 0
     fi    
 }
-
 has_filesystem() {
     DEVICE=${1}
     OUTPUT=$(file -L -s ${DEVICE})
@@ -139,26 +149,27 @@ scan_for_new_disks() {
 }
 
 get_next_mountpoint() {
-    DIRS=$(ls -1d ${DATA_BASE}/disk* 2>/dev/null| sort --version-sort)
-    MAX=$(echo "${DIRS}"|tail -n 1 | tr -d "[a-zA-Z/]")
-    if [ -z "${MAX}" ];
-    then
-        echo "${DATA_BASE}/disk1"
-        return
-    fi
-    IDX=1
-    while [ "${IDX}" -lt "${MAX}" ];
-    do
-        NEXT_DIR="${DATA_BASE}/disk${IDX}"
-        if [ ! -d "${NEXT_DIR}" ];
-        then
-            echo "${NEXT_DIR}"
-            return
-        fi
-        IDX=$(( ${IDX} + 1 ))
-    done
-    IDX=$(( ${MAX} + 1))
-    echo "${DATA_BASE}/disk${IDX}"
+#    DIRS=$(ls -1d ${DATA_BASE}/disk* 2>/dev/null| sort --version-sort)
+#    MAX=$(echo "${DIRS}"|tail -n 1 | tr -d "[a-zA-Z/]")
+#    if [ -z "${MAX}" ];
+ #   then
+ #       echo "${DATA_BASE}/disk1"
+ #       return
+ #   fi
+ #   IDX=1
+ #   while [ "${IDX}" -lt "${MAX}" ];
+ #   do
+ #       NEXT_DIR="${DATA_BASE}/disk${IDX}"
+ #       if [ ! -d "${NEXT_DIR}" ];
+ #       then
+ #           echo "${NEXT_DIR}"
+ #           return
+ #       fi
+ #       IDX=$(( ${IDX} + 1 ))
+ #   done
+ #   IDX=$(( ${MAX} + 1))
+ #   echo "${DATA_BASE}/disk${IDX}"
+ echo "${DATA_BASE}"
 }
 
 add_to_fstab() {
@@ -243,7 +254,6 @@ scan_partition_format()
 	    mount "${MOUNTPOINT}"
 	done
 }
-
 create_striped_volume()
 {
     DISKS=(${@})
@@ -296,10 +306,9 @@ create_striped_volume()
 }
 
 check_mdadm() {
-    dpkg -s mdadm >/dev/null 2>&1
+    rpm -q mdadm >/dev/null 2>&1
     if [ ${?} -ne 0 ]; then
-        (apt-get -y update || (sleep 15; apt-get -y update)) > /dev/null
-        DEBIAN_FRONTEND=noninteractive sudo apt-get -y install mdadm --fix-missing
+        (yum -y update || (sleep 15; yum -y update)) > /dev/null
     fi
 }
 
